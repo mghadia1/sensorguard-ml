@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sensorguard-ml"
+version = "0.1.0"
+description = "Leakage-aware predictive-maintenance classification pipeline"
+requires-python = ">=3.12"
+dependencies = [
+  "joblib>=1.4",
+  "numpy>=2.0",
+  "pandas>=2.2",
+  "scikit-learn>=1.6",
+]
+
+[project.optional-dependencies]
+torch = ["torch>=2.6"]
+dev = ["pytest>=8.3"]
+
+[project.scripts]
+sensorguard = "sensorguard.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+

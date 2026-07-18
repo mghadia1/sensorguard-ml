@@ -1,10 +1,32 @@
 # SensorGuard ML
 
-SensorGuard ML is a general machine-learning project for predicting machine-failure labels from equipment measurements. It is the ML-readiness project that comes before medical imaging or medical robotics.
+SensorGuard ML is a general machine-learning project for predicting machine-failure labels from equipment measurements — the ML-readiness project that comes before medical imaging or medical robotics.
 
-The project uses the UCI AI4I 2020 Predictive Maintenance dataset. UCI describes it as a **synthetic** dataset reflecting industrial predictive-maintenance data. It contains 10,000 rows and is licensed under CC BY 4.0. It must not be described as data collected from deployed factory equipment.
+> **What this is not:** real factory data or a deployable maintenance model. The UCI AI4I 2020 dataset is **synthetic** (UCI's own description), and the model is a learning project that should not control real maintenance decisions.
 
-Dataset source: <https://archive.ics.uci.edu/dataset/601/ai4i>
+![Validation average-precision comparison across the majority baseline, logistic regression, decision tree, random forest, and PyTorch MLP](docs/hero.svg)
+
+## Quickstart
+
+```bash
+git clone https://github.com/mghadia1/sensorguard-ml.git
+cd sensorguard-ml
+python3 -m venv .venv && source .venv/bin/activate
+python -m pip install '.[dev,torch]'
+
+# run the tests (9)
+PYTHONPATH=src python -m unittest discover -s tests -v
+
+# download the checksummed dataset, then train and evaluate
+sensorguard download --destination data/raw
+sensorguard train --data data/raw/ai4i2020.csv --out outputs/baseline --with-torch
+```
+
+## Headline result
+
+On the untouched held-out test split, the validation-selected random forest (probability threshold 0.39) scored **precision 0.712, recall 0.691, F1 0.701, ROC-AUC 0.974, average precision 0.711**. A 40-epoch PyTorch MLP trained on the same split scored test average precision 0.529 and did **not** outperform it — the measured comparison, not an assumption. Full numbers and limits: [docs/results.md](docs/results.md). These are synthetic-dataset scores, not real-world predictive-maintenance performance.
+
+The project uses the UCI AI4I 2020 Predictive Maintenance dataset: 10,000 rows, CC BY 4.0. Dataset source: <https://archive.ics.uci.edu/dataset/601/ai4i>
 
 ## What the pipeline does
 
@@ -29,36 +51,13 @@ The verified baseline results are recorded in `docs/results.md`. Generated model
 
 The actual features are product type, air temperature, process temperature, rotational speed, torque, and tool wear.
 
-## Setup
+## Audit the data
 
 ```bash
-cd projects/sensorguard-ml
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install '.[dev,torch]'
-```
-
-## Download and audit the data
-
-```bash
-sensorguard download --destination data/raw
 sensorguard audit --data data/raw/ai4i2020.csv
 ```
 
-## Train and evaluate
-
-```bash
-sensorguard train \
-  --data data/raw/ai4i2020.csv \
-  --out outputs/baseline \
-  --with-torch
-```
-
-Run the tests:
-
-```bash
-PYTHONPATH=src python -m unittest discover -s tests -v
-```
+The audit validates columns, categories, missing values, finite values, and unique row IDs before any training.
 
 ## Complete the ML-readiness check
 

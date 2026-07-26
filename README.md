@@ -89,3 +89,12 @@ sensorguard predict \
 - The model is a learning project and should not control real maintenance decisions.
 
 Read `docs/how-it-works.md` before using this project on a resume.
+
+## Container
+
+```bash
+docker build -t sensorguard-ml .
+docker run --rm sensorguard-ml
+```
+
+The default container command prints the available dataset, training, prediction, and learning commands. The image was built and smoke-tested locally on July 21, 2026.

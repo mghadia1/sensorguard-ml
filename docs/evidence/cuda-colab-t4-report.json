@@ -1,0 +1,87 @@
+{
+  "source_file_sha256": "39916dd184af82243ba30528bc527fc229b2e59c3e7d61663dd98ece6fe69fc6",
+  "status": "verified_cuda_run",
+  "protocol": {
+    "purpose": "CPU versus CUDA implementation parity and timing",
+    "dataset_partition": "train for fitting; validation for parity metrics",
+    "official_test_evaluated": false,
+    "preprocessing_fit_on": "training split only",
+    "random_state": 42,
+    "repeats": 5,
+    "xgboost": {
+      "n_estimators": 500,
+      "learning_rate": 0.05,
+      "max_depth": 4,
+      "min_child_weight": 2.0,
+      "subsample": 0.8,
+      "colsample_bytree": 0.8,
+      "reg_alpha": 0.0,
+      "reg_lambda": 1.0,
+      "scale_pos_weight": 28.55665024630542,
+      "objective": "binary:logistic",
+      "eval_metric": "logloss",
+      "tree_method": "hist",
+      "device": "cuda",
+      "random_state": 42,
+      "n_jobs": 1,
+      "verbosity": 0
+    }
+  },
+  "environment": {
+    "gpu": "Tesla T4, 580.82.07, 15360 MiB",
+    "python": "3.12.13",
+    "platform": "Linux-6.6.122+-x86_64-with-glibc2.35",
+    "xgboost": "3.3.0",
+    "xgboost_build_info": {
+      "BUILTIN_PREFETCH_PRESENT": true,
+      "CUDA_VERSION": [12, 9],
+      "DEBUG": false,
+      "GCC_VERSION": [10, 3, 1],
+      "GLIBC_VERSION": [2, 28],
+      "MM_PREFETCH_PRESENT": true,
+      "NCCL_VERSION": [2, 29, 2],
+      "THRUST_VERSION": [2, 8, 2],
+      "USE_CUDA": true,
+      "USE_DLOPEN_NCCL": true,
+      "USE_FEDERATED": true,
+      "USE_NCCL": true,
+      "USE_NVCOMP": false,
+      "USE_OPENMP": true,
+      "USE_RMM": false,
+      "libxgboost": "/usr/local/lib/python3.12/dist-packages/xgboost/lib/libxgboost.so"
+    }
+  },
+  "rows": {
+    "train": 6000,
+    "validation": 2000,
+    "test_evaluated": 0
+  },
+  "timing_seconds": {
+    "shared_preprocessing": 0.03704351199996836,
+    "cpu_fit_runs": [
+      0.8554248479999842,
+      0.8056480029999875,
+      1.579685579999989,
+      1.1049505899999872,
+      0.3681380980000313
+    ],
+    "cuda_fit_runs": [
+      0.7310491850000176,
+      0.4189823939999542,
+      0.41610311800002364,
+      0.4179908759999762,
+      0.41281940999999733
+    ],
+    "cpu_fit_median": 0.8554248479999842,
+    "cuda_fit_median": 0.4179908759999762,
+    "cpu_over_cuda_speedup": 2.046515599063059
+  },
+  "validation_parity": {
+    "cpu_average_precision": 0.7769458889549244,
+    "cuda_average_precision": 0.7612584673736296,
+    "cpu_roc_auc": 0.9660211910851297,
+    "cuda_roc_auc": 0.9670411642918036,
+    "maximum_absolute_probability_difference": 0.27617761492729187
+  },
+  "interpretation": "A speedup above 1.0 means CUDA was faster. On this small tabular dataset, GPU startup and transfer overhead may make CUDA slower than CPU."
+}

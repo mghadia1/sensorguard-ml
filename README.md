@@ -64,9 +64,13 @@ hyperparameters except for `device`, records repeated fit times, and compares
 average precision, ROC-AUC, and probability outputs on validation data. It does
 **not** evaluate the official test split again.
 
-The notebook has been statically validated and the CPU code path is tested
-locally. CUDA results remain unverified until a successful Colab GPU run creates
-`outputs/cuda-benchmark/report.json` with `status: verified_cuda_run`.
+The workflow was verified on a Colab Tesla T4 on August 4, 2026. Across five
+fits, median XGBoost training time was 0.8554 seconds on CPU and 0.4180 seconds
+on CUDA, a 2.05x speedup for this run. Validation AP was 0.7769 on CPU and
+0.7613 on CUDA; the implementations were close but not numerically identical.
+The full machine-readable evidence is in
+[`docs/evidence/cuda-colab-t4-report.json`](docs/evidence/cuda-colab-t4-report.json).
+This small, noisy benchmark does not establish a universal GPU speedup.
 
 ## Why some columns are excluded
 

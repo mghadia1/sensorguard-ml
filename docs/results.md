@@ -96,15 +96,27 @@ For this fitted pipeline and validation split, torque caused the largest loss in
 
 These results apply to one deterministic random split of the synthetic UCI dataset. The random split may place nearby values from the generated sequence into different splits, and it does not test a future time period, new machine, or new factory. The scores must not be described as real-world predictive-maintenance performance.
 
-## CUDA implementation status (August 4, 2026)
+## Verified CUDA comparison — August 4, 2026
 
-A Colab-ready CPU-versus-CUDA XGBoost benchmark is implemented in
-`notebooks/sensorguard_cuda_colab.ipynb`. The workflow verifies the NVIDIA
-runtime, reuses the frozen XGBoost configuration, fits preprocessing on training
-data only, and evaluates parity on validation data only. It explicitly records
-that zero official-test rows were evaluated.
+A Colab Tesla T4 run used XGBoost 3.3.0 built with CUDA 12.9. The workflow
+reused the frozen XGBoost configuration, fitted preprocessing on 6,000 training
+rows, and compared predictions on 2,000 validation rows. It evaluated zero
+official-test rows.
 
-No CUDA timing or metric is reported here yet. This MacBook cannot execute CUDA,
-and an unexecuted notebook is not experimental evidence. The generated
-`outputs/cuda-benchmark/report.json` should be reviewed after a successful Colab
-T4 run before any GPU result is documented or used in application materials.
+| Device | Median fit time (5 runs) | Validation AP | Validation ROC-AUC |
+|---|---:|---:|---:|
+| CPU | 0.8554 s | 0.7769 | 0.9660 |
+| CUDA (Tesla T4) | **0.4180 s** | 0.7613 | 0.9670 |
+
+The observed median CPU-over-CUDA speedup was **2.05x**. CPU fit times ranged
+from 0.3681 to 1.5797 seconds and CUDA times ranged from 0.4128 to 0.7310
+seconds, so this small benchmark is noisy. The maximum absolute difference
+between CPU and CUDA validation probabilities was 0.2762. The implementations
+therefore showed similar aggregate ranking metrics, not identical predictions.
+This result applies only to this Colab run and does not establish that CUDA is
+always faster for small tabular datasets.
+
+The submitted values are preserved as normalized JSON in
+`docs/evidence/cuda-colab-t4-report.json`. The original downloaded report's
+SHA-256 is
+`39916dd184af82243ba30528bc527fc229b2e59c3e7d61663dd98ece6fe69fc6`.

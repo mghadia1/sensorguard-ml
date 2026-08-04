@@ -32,6 +32,10 @@ All preprocessing is inside the scikit-learn pipeline. Calling `fit` on training
 - Logistic regression is a linear probability model and provides a strong interpretable baseline.
 - The decision tree learns nonlinear if/then regions.
 - The random forest averages many trees to reduce a single tree's variance.
+- XGBoost builds trees sequentially so each new tree focuses on errors left by
+  the current ensemble. This experiment uses histogram tree construction on
+  CPU, regularization, row/column subsampling, and a training-derived positive
+  class weight.
 - The optional PyTorch MLP adds a learned nonlinear representation, but complexity is useful only if its measured comparison supports it.
 
 ## 6. Why accuracy is not enough
@@ -55,7 +59,7 @@ That rule is part of the experiment, not a universal maintenance policy. A real 
 
 ## 8. Model selection and test evaluation
 
-The classical model with the highest validation average precision wins, with validation F1 as the tie-breaker. Its already-selected threshold is then used once on the test split. The saved test predictions let another person reconstruct the confusion matrix.
+The classical model with the highest validation average precision wins, with validation F1 as the tie-breaker. Under that frozen rule, XGBoost beat the random forest on validation average precision, 0.7659 versus 0.6917. Its already-selected threshold is then used once on the test split. The saved test predictions let another person reconstruct the confusion matrix.
 
 Permutation importance is calculated on validation data. One feature is shuffled at a time, breaking its relationship with the labels, and the drop in average precision is measured. A larger drop means the trained pipeline relied more on that feature for this validation split. It does not prove that the feature causes failures.
 
@@ -74,3 +78,16 @@ Each batch follows five steps:
 ## 10. What this project does not prove
 
 The UCI data is synthetic. The split is random rather than chronological or site-based. The labels encode a simulated data-generating process. The result is evidence that the pipeline works on this dataset, not evidence that it predicts failures in a real factory.
+## 11. CUDA parity benchmark
+
+The optional Colab benchmark isolates XGBoost compute from preprocessing. A
+single preprocessor is fitted on the training split and transforms training and
+validation once. CPU and CUDA classifiers then receive the same matrices, labels,
+random seed, class-imbalance weight, tree method, and hyperparameters; only the
+XGBoost `device` differs. Repeated fit times are recorded, and validation average
+precision, ROC-AUC, and maximum probability difference check whether the GPU
+implementation remains numerically consistent.
+
+The benchmark never scores the test split. This preserves the original held-out
+test result and prevents repeated test-set checking from becoming a hidden model
+selection loop.

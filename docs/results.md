@@ -1,4 +1,4 @@
-# Baseline results
+# Baseline and XGBoost comparison results
 
 Run date: July 14, 2026
 
@@ -35,6 +35,32 @@ The deterministic stratified split contained 6,000 training rows, 2,000 validati
 
 The random forest was selected because it had the highest validation average precision. Its validation-selected probability threshold was 0.39.
 
+## Frozen XGBoost extension — August 4, 2026
+
+The extension preserved the dataset, six leakage-safe features, random state
+42, 60/20/20 stratified split, validation selection rule, and test policy. It
+added one XGBoost 3.3.0 candidate using CPU histogram trees, 500 estimators,
+learning rate 0.05, maximum depth 4, row/column subsampling 0.8, and a positive
+class weight calculated only from the training split.
+
+| Model | Validation average precision | Validation F1 |
+|---|---:|---:|
+| Random forest | 0.6917 | 0.6565 |
+| XGBoost | **0.7659** | **0.7463** |
+
+The frozen rule selected XGBoost and threshold 0.66. Its one held-out test
+evaluation produced precision 0.7538, recall 0.7206, F1 0.7368, ROC-AUC 0.9770,
+average precision 0.7617, and confusion matrix [[1916, 16], [19, 49]]. Relative
+to the preserved random-forest result, test F1 improved about 0.036 and average
+precision about 0.051. This does not remove the dataset's synthetic-data and
+random-split limitations.
+
+Evidence SHA-256:
+
+- frozen protocol: `d02636b10babf386159e6de53626eadff56e4b1ba40392a6bd24057379cba340`;
+- metrics: `6168f939237d1486bd9523fb4d6ae54674817e715caf7503ed22af075e15502e`;
+- saved model bundle: `fc1662afbc8d96e9e3c8f7a8f0a8de96e3eea2fe053b107e8387f799cf269a28`.
+
 ## Held-out test result
 
 The selected random forest produced:
@@ -69,3 +95,28 @@ For this fitted pipeline and validation split, torque caused the largest loss in
 ## Interpretation limits
 
 These results apply to one deterministic random split of the synthetic UCI dataset. The random split may place nearby values from the generated sequence into different splits, and it does not test a future time period, new machine, or new factory. The scores must not be described as real-world predictive-maintenance performance.
+
+## Verified CUDA comparison — August 4, 2026
+
+A Colab Tesla T4 run used XGBoost 3.3.0 built with CUDA 12.9. The workflow
+reused the frozen XGBoost configuration, fitted preprocessing on 6,000 training
+rows, and compared predictions on 2,000 validation rows. It evaluated zero
+official-test rows.
+
+| Device | Median fit time (5 runs) | Validation AP | Validation ROC-AUC |
+|---|---:|---:|---:|
+| CPU | 0.8554 s | 0.7769 | 0.9660 |
+| CUDA (Tesla T4) | **0.4180 s** | 0.7613 | 0.9670 |
+
+The observed median CPU-over-CUDA speedup was **2.05x**. CPU fit times ranged
+from 0.3681 to 1.5797 seconds and CUDA times ranged from 0.4128 to 0.7310
+seconds, so this small benchmark is noisy. The maximum absolute difference
+between CPU and CUDA validation probabilities was 0.2762. The implementations
+therefore showed similar aggregate ranking metrics, not identical predictions.
+This result applies only to this Colab run and does not establish that CUDA is
+always faster for small tabular datasets.
+
+The submitted values are preserved as normalized JSON in
+`docs/evidence/cuda-colab-t4-report.json`. The original downloaded report's
+SHA-256 is
+`39916dd184af82243ba30528bc527fc229b2e59c3e7d61663dd98ece6fe69fc6`.

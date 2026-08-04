@@ -10,6 +10,7 @@ import pandas as pd
 
 from .data import load_dataset, split_dataset, validate_dataset
 from .download import download_dataset
+from .evidence import verify_cuda_evidence
 from .gpu_benchmark import run_gpu_benchmark
 from .learning import run_interactive_check
 from .modeling import load_bundle, predict_rows, train_evaluate_save
@@ -55,6 +56,15 @@ def main() -> int:
     )
     gpu_parser.add_argument("--random-state", type=int, default=42)
     gpu_parser.add_argument("--repeats", type=int, default=3)
+
+    evidence_parser = subparsers.add_parser(
+        "verify-evidence", help="audit the published CUDA benchmark evidence"
+    )
+    evidence_parser.add_argument(
+        "--report",
+        type=Path,
+        default=Path("docs/evidence/cuda-colab-t4-report.json"),
+    )
 
     args = parser.parse_args()
     if args.command == "download":
@@ -117,6 +127,10 @@ def main() -> int:
             f"speedup={timing['cpu_over_cuda_speedup']:.3f}x. "
             f"Wrote {args.out}"
         )
+        return 0
+    if args.command == "verify-evidence":
+        result = verify_cuda_evidence(args.report)
+        print(json.dumps(result, indent=2))
         return 0
     raise AssertionError(f"unsupported command: {args.command}")
 

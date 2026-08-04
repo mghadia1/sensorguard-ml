@@ -18,6 +18,7 @@ from sensorguard.data import (
     validate_dataset,
 )
 from sensorguard.download import file_sha256
+from sensorguard.evidence import verify_cuda_evidence
 from sensorguard.gpu_benchmark import _nvidia_smi
 from sensorguard.learning import QUESTIONS, save_answers
 from sensorguard.modeling import (
@@ -118,6 +119,22 @@ class MetricTests(unittest.TestCase):
 
 
 class PipelineTests(unittest.TestCase):
+    def test_published_cuda_evidence_is_internally_consistent(self) -> None:
+        report = verify_cuda_evidence("docs/evidence/cuda-colab-t4-report.json")
+        self.assertEqual(report["status"], "verified")
+        self.assertEqual(report["official_test_rows_evaluated"], 0)
+        self.assertGreater(report["cpu_over_cuda_speedup"], 1.0)
+
+    def test_cuda_evidence_rejects_tampered_speedup(self) -> None:
+        source = Path("docs/evidence/cuda-colab-t4-report.json")
+        payload = json.loads(source.read_text(encoding="utf-8"))
+        payload["timing_seconds"]["cpu_over_cuda_speedup"] = 99.0
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            report = Path(temporary_directory) / "report.json"
+            report.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "speedup"):
+                verify_cuda_evidence(report)
+
     def test_cuda_benchmark_rejects_a_runtime_without_nvidia(self) -> None:
         with patch("sensorguard.gpu_benchmark.subprocess.run", side_effect=FileNotFoundError):
             with self.assertRaisesRegex(RuntimeError, "Colab"):

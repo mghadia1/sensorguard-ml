@@ -72,6 +72,17 @@ The full machine-readable evidence is in
 [`docs/evidence/cuda-colab-t4-report.json`](docs/evidence/cuda-colab-t4-report.json).
 This small, noisy benchmark does not establish a universal GPU speedup.
 
+Audit the published evidence without downloading data or retraining:
+
+```bash
+sensorguard verify-evidence
+```
+
+The command independently checks the frozen split policy, CUDA build flag, raw
+timing runs, reported medians and speedup, validation-metric ranges, and the
+zero-test-access claim. CI runs the same validator through the test suite so an
+edited or internally inconsistent benchmark fails visibly.
+
 ## Why some columns are excluded
 
 `UDI` and `Product ID` are identifiers rather than operating measurements. `TWF`, `HDF`, `PWF`, `OSF`, and `RNF` are individual failure-mode target columns that directly determine `Machine failure`. Using them would leak the answer into the features and produce a misleadingly easy result.

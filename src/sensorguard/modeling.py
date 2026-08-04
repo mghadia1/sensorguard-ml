@@ -28,6 +28,7 @@ from sklearn.metrics import (
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.tree import DecisionTreeClassifier
+from xgboost import XGBClassifier
 
 from .data import FEATURE_COLUMNS, TARGET_COLUMN, DatasetSplits, feature_target, split_summary
 from .report import save_confusion_matrix, save_model_comparison
@@ -69,7 +70,36 @@ def make_preprocessor(*, dense: bool = False) -> ColumnTransformer:
     )
 
 
-def candidate_pipelines(*, random_state: int = 42) -> dict[str, Pipeline]:
+def xgboost_parameters(
+    *, device: str, random_state: int, scale_pos_weight: float
+) -> dict[str, Any]:
+    """Return the frozen XGBoost configuration for CPU/GPU parity runs."""
+
+    if device not in {"cpu", "cuda"}:
+        raise ValueError("XGBoost device must be 'cpu' or 'cuda'")
+    return {
+        "n_estimators": 500,
+        "learning_rate": 0.05,
+        "max_depth": 4,
+        "min_child_weight": 2.0,
+        "subsample": 0.8,
+        "colsample_bytree": 0.8,
+        "reg_alpha": 0.0,
+        "reg_lambda": 1.0,
+        "scale_pos_weight": scale_pos_weight,
+        "objective": "binary:logistic",
+        "eval_metric": "logloss",
+        "tree_method": "hist",
+        "device": device,
+        "random_state": random_state,
+        "n_jobs": 1,
+        "verbosity": 0,
+    }
+
+
+def candidate_pipelines(
+    *, random_state: int = 42, scale_pos_weight: float = 1.0
+) -> dict[str, Pipeline]:
     return {
         "majority_baseline": Pipeline(
             steps=(
@@ -115,6 +145,21 @@ def candidate_pipelines(*, random_state: int = 42) -> dict[str, Pipeline]:
                         class_weight="balanced_subsample",
                         random_state=random_state,
                         n_jobs=1,
+                    ),
+                ),
+            )
+        ),
+        "xgboost": Pipeline(
+            steps=(
+                ("preprocess", make_preprocessor()),
+                (
+                    "model",
+                    XGBClassifier(
+                        **xgboost_parameters(
+                            device="cpu",
+                            random_state=random_state,
+                            scale_pos_weight=scale_pos_weight,
+                        )
                     ),
                 ),
             )
@@ -173,8 +218,15 @@ def train_candidates(
 ) -> list[CandidateResult]:
     train_features, train_labels = feature_target(splits.train)
     validation_features, validation_labels = feature_target(splits.validation)
+    positive_count = int(np.asarray(train_labels).sum())
+    negative_count = len(train_labels) - positive_count
+    if positive_count < 1:
+        raise ValueError("training split must contain at least one positive example")
+    scale_pos_weight = negative_count / positive_count
     results: list[CandidateResult] = []
-    for name, pipeline in candidate_pipelines(random_state=random_state).items():
+    for name, pipeline in candidate_pipelines(
+        random_state=random_state, scale_pos_weight=scale_pos_weight
+    ).items():
         pipeline.fit(train_features, train_labels)
         probabilities = pipeline.predict_proba(validation_features)[:, 1]
         threshold = select_threshold(validation_labels, probabilities)
@@ -257,6 +309,19 @@ def train_evaluate_save(
         "split_summary": split_summary(splits),
         "selection_rule": "highest validation average precision, then validation F1",
         "threshold_rule": "highest validation F1, then recall, then closeness to 0.5",
+        "xgboost_protocol": {
+            "version_family": "3.x",
+            "tree_method": "hist",
+            "device": "cpu",
+            "n_estimators": 500,
+            "learning_rate": 0.05,
+            "max_depth": 4,
+            "min_child_weight": 2.0,
+            "subsample": 0.8,
+            "colsample_bytree": 0.8,
+            "scale_pos_weight": "training negatives divided by training positives",
+            "early_stopping": False,
+        },
         "validation_candidates": {
             result.name: result.validation_metrics for result in candidates
         },

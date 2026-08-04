@@ -4,7 +4,7 @@ SensorGuard ML is a general machine-learning project for predicting machine-fail
 
 > **What this is not:** real factory data or a deployable maintenance model. The UCI AI4I 2020 dataset is **synthetic** (UCI's own description), and the model is a learning project that should not control real maintenance decisions.
 
-![Validation average-precision comparison across the majority baseline, logistic regression, decision tree, random forest, and PyTorch MLP](docs/hero.svg)
+![Validation average-precision comparison across the classical candidates](docs/hero.svg)
 
 ## Quickstart
 
@@ -14,17 +14,26 @@ cd sensorguard-ml
 python3 -m venv .venv && source .venv/bin/activate
 python -m pip install '.[dev,torch]'
 
-# run the tests (9)
+# macOS only: XGBoost requires the OpenMP runtime
+brew install libomp
+
+# run the tests (10)
 PYTHONPATH=src python -m unittest discover -s tests -v
 
 # download the checksummed dataset, then train and evaluate
 sensorguard download --destination data/raw
-sensorguard train --data data/raw/ai4i2020.csv --out outputs/baseline --with-torch
+sensorguard train --data data/raw/ai4i2020.csv --out outputs/xgboost-comparison --with-torch
 ```
 
 ## Headline result
 
-On the untouched held-out test split, the validation-selected random forest (probability threshold 0.39) scored **precision 0.712, recall 0.691, F1 0.701, ROC-AUC 0.974, average precision 0.711**. A 40-epoch PyTorch MLP trained on the same split scored test average precision 0.529 and did **not** outperform it — the measured comparison, not an assumption. Full numbers and limits: [docs/results.md](docs/results.md). These are synthetic-dataset scores, not real-world predictive-maintenance performance.
+On August 4, 2026, a frozen comparison added CPU XGBoost to the same split and
+validation rules. XGBoost won at threshold 0.66 and scored **precision 0.754,
+recall 0.721, F1 0.737, ROC-AUC 0.977, and average precision 0.762** on the
+single held-out test evaluation. The earlier random-forest result—F1 0.701 and
+average precision 0.711—is preserved. Full numbers and limits:
+[docs/results.md](docs/results.md). These are synthetic-dataset scores, not
+real-world predictive-maintenance performance.
 
 The project uses the UCI AI4I 2020 Predictive Maintenance dataset: 10,000 rows, CC BY 4.0. Dataset source: <https://archive.ics.uci.edu/dataset/601/ai4i>
 
@@ -35,7 +44,7 @@ The project uses the UCI AI4I 2020 Predictive Maintenance dataset: 10,000 rows, 
 3. Removes IDs and five failure-mode flags from the model features.
 4. Makes deterministic 60/20/20 stratified train, validation, and test splits.
 5. Fits preprocessing only on training data.
-6. Compares a majority baseline, logistic regression, decision tree, and random forest.
+6. Compares a majority baseline, logistic regression, decision tree, random forest, and CPU XGBoost.
 7. Selects the model using validation average precision.
 8. Selects a probability threshold using validation F1 and recall.
 9. Evaluates the selected pipeline once on the held-out test split.
@@ -44,6 +53,20 @@ The project uses the UCI AI4I 2020 Predictive Maintenance dataset: 10,000 rows, 
 12. Optionally trains a small PyTorch MLP on the same split for comparison.
 
 The verified baseline results are recorded in `docs/results.md`. Generated models and result files remain under ignored `outputs/` directories rather than being committed as source code.
+
+## CUDA benchmark in Google Colab
+
+[Open the CUDA benchmark in Colab](https://colab.research.google.com/github/mghadia1/sensorguard-ml/blob/agent/cuda-colab-benchmark/notebooks/sensorguard_cuda_colab.ipynb)
+
+The notebook implements a controlled CPU-versus-CUDA XGBoost comparison on a
+Colab T4. It shares one training-fitted preprocessor, uses identical frozen
+hyperparameters except for `device`, records repeated fit times, and compares
+average precision, ROC-AUC, and probability outputs on validation data. It does
+**not** evaluate the official test split again.
+
+The notebook has been statically validated and the CPU code path is tested
+locally. CUDA results remain unverified until a successful Colab GPU run creates
+`outputs/cuda-benchmark/report.json` with `status: verified_cuda_run`.
 
 ## Why some columns are excluded
 
@@ -75,7 +98,7 @@ Provide a CSV containing the six feature columns, then run:
 
 ```bash
 sensorguard predict \
-  --model outputs/baseline/model.joblib \
+  --model outputs/xgboost-comparison/model.joblib \
   --input examples/prediction_rows.csv \
   --out outputs/predictions.csv
 ```
@@ -97,4 +120,10 @@ docker build -t sensorguard-ml .
 docker run --rm sensorguard-ml
 ```
 
-The default container command prints the available dataset, training, prediction, and learning commands. The image was built and smoke-tested locally on July 21, 2026.
+The Linux image installs `libgomp1` and the official minimal `xgboost-cpu`
+package, avoiding unused NVIDIA/NCCL downloads. It was rebuilt and its XGBoost
+3.3.0 import and CLI were smoke-tested locally on August 4, 2026.
+
+The container is intentionally CPU-only. Use the Colab notebook for CUDA rather
+than adding hundreds of megabytes of unused NVIDIA libraries to the deployment
+image.

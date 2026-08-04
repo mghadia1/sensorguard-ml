@@ -10,6 +10,7 @@ import pandas as pd
 
 from .data import load_dataset, split_dataset, validate_dataset
 from .download import download_dataset
+from .gpu_benchmark import run_gpu_benchmark
 from .learning import run_interactive_check
 from .modeling import load_bundle, predict_rows, train_evaluate_save
 from .torch_model import train_torch_comparison
@@ -44,6 +45,16 @@ def main() -> int:
         type=Path,
         default=Path("outputs/learning-check/answers.json"),
     )
+
+    gpu_parser = subparsers.add_parser(
+        "gpu-benchmark", help="compare frozen CPU and CUDA XGBoost on train/validation"
+    )
+    gpu_parser.add_argument("--data", type=Path, default=Path("data/raw/ai4i2020.csv"))
+    gpu_parser.add_argument(
+        "--out", type=Path, default=Path("outputs/cuda-benchmark/report.json")
+    )
+    gpu_parser.add_argument("--random-state", type=int, default=42)
+    gpu_parser.add_argument("--repeats", type=int, default=3)
 
     args = parser.parse_args()
     if args.command == "download":
@@ -89,6 +100,23 @@ def main() -> int:
         return 0
     if args.command == "learn":
         run_interactive_check(args.out)
+        return 0
+    if args.command == "gpu-benchmark":
+        frame = load_dataset(args.data)
+        splits = split_dataset(frame, random_state=args.random_state)
+        report = run_gpu_benchmark(
+            splits,
+            args.out,
+            random_state=args.random_state,
+            repeats=args.repeats,
+        )
+        timing = report["timing_seconds"]
+        print(
+            f"Verified CUDA run; median CPU fit={timing['cpu_fit_median']:.4f}s, "
+            f"CUDA fit={timing['cuda_fit_median']:.4f}s, "
+            f"speedup={timing['cpu_over_cuda_speedup']:.3f}x. "
+            f"Wrote {args.out}"
+        )
         return 0
     raise AssertionError(f"unsupported command: {args.command}")
 

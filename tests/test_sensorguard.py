@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
@@ -17,13 +18,16 @@ from sensorguard.data import (
     validate_dataset,
 )
 from sensorguard.download import file_sha256
+from sensorguard.gpu_benchmark import _nvidia_smi
 from sensorguard.learning import QUESTIONS, save_answers
 from sensorguard.modeling import (
     binary_metrics,
+    candidate_pipelines,
     load_bundle,
     predict_rows,
     select_threshold,
     train_evaluate_save,
+    xgboost_parameters,
 )
 
 
@@ -114,6 +118,33 @@ class MetricTests(unittest.TestCase):
 
 
 class PipelineTests(unittest.TestCase):
+    def test_cuda_benchmark_rejects_a_runtime_without_nvidia(self) -> None:
+        with patch("sensorguard.gpu_benchmark.subprocess.run", side_effect=FileNotFoundError):
+            with self.assertRaisesRegex(RuntimeError, "Colab"):
+                _nvidia_smi()
+
+    def test_frozen_xgboost_parameters_support_cpu_and_cuda(self) -> None:
+        cpu = xgboost_parameters(device="cpu", random_state=17, scale_pos_weight=12.5)
+        cuda = xgboost_parameters(device="cuda", random_state=17, scale_pos_weight=12.5)
+        self.assertEqual(cpu["tree_method"], "hist")
+        self.assertEqual(cpu["device"], "cpu")
+        self.assertEqual(cuda["device"], "cuda")
+        for key in cpu:
+            if key != "device":
+                self.assertEqual(cpu[key], cuda[key])
+        with self.assertRaisesRegex(ValueError, "device"):
+            xgboost_parameters(device="mps", random_state=17, scale_pos_weight=12.5)
+
+    def test_xgboost_candidate_is_cpu_histogram_and_imbalance_aware(self) -> None:
+        candidate = candidate_pipelines(
+            random_state=17, scale_pos_weight=12.5
+        )["xgboost"]
+        parameters = candidate.named_steps["model"].get_params()
+        self.assertEqual(parameters["tree_method"], "hist")
+        self.assertEqual(parameters["device"], "cpu")
+        self.assertEqual(parameters["scale_pos_weight"], 12.5)
+        self.assertEqual(parameters["random_state"], 17)
+
     def test_training_saves_reusable_bundle_and_test_evidence(self) -> None:
         splits = split_dataset(make_fixture(row_count=700), random_state=5)
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -124,6 +155,7 @@ class PipelineTests(unittest.TestCase):
             saved = json.loads((output / "metrics.json").read_text(encoding="utf-8"))
             self.assertEqual(saved, report)
             self.assertIn(report["selected_model"], report["validation_candidates"])
+            self.assertIn("xgboost", report["validation_candidates"])
             self.assertGreater(report["test_metrics"]["average_precision"], 0.70)
             self.assertEqual(len(predictions), 4)
             self.assertTrue((output / "test_predictions.csv").exists())

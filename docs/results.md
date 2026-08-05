@@ -96,63 +96,82 @@ For this fitted pipeline and validation split, torque caused the largest loss in
 
 These results apply to one deterministic random split of the synthetic UCI dataset. The random split may place nearby values from the generated sequence into different splits, and it does not test a future time period, new machine, or new factory. The scores must not be described as real-world predictive-maintenance performance.
 
-## Verified CUDA comparison — August 4, 2026
+## Corrected CUDA comparison — 15 repeats, warm-up excluded
 
 A Colab Tesla T4 run used XGBoost 3.3.0 built with CUDA 12.9. The workflow
 reused the frozen XGBoost configuration, fitted preprocessing on 6,000 training
 rows, and compared predictions on 2,000 validation rows. It evaluated zero
 official-test rows.
 
-| Device | Median fit time (5 runs) | Validation AP | Validation ROC-AUC |
-|---|---:|---:|---:|
-| CPU | 0.8554 s | 0.7769 | 0.9660 |
-| CUDA (Tesla T4) | **0.4180 s** | 0.7613 | 0.9670 |
+| Device | Discarded warm-up | Median fit time (15 runs) | Standard deviation | Spread |
+|---|---:|---:|---:|---:|
+| CPU | 1.3072 s | **0.2742 s** | 0.0928 s | 2.25x |
+| CUDA (Tesla T4) | 0.7949 s | 0.4248 s | **0.0340 s** | **1.25x** |
 
-**This run is underpowered and no longer verifies.** It is kept as history; the
-n=15 protocol below supersedes it.
+With a discarded warm-up fit and 15 timed repeats per device, CPU was faster
+than the Tesla T4: median 0.2742 s against 0.4248 s, a CPU-over-CUDA ratio of
+0.6456, or **1.55x faster on CPU**. A seeded permutation test over 100,000
+resamples gives **p = 0.0003 for CPU being faster**; the prespecified opposite
+alternative, CUDA being faster, gives p = 0.9999. Thirteen of 15 CPU runs were
+faster than every CUDA run.
 
-CUDA's median fit time was 2.05x faster than CPU's over five timed repeats per
-device. An exact permutation test on the median difference across all 252 splits
-gives **p = 0.0595**, so the difference is *not* established at this sample size.
-The fastest CPU run (0.3681 s) beat the slowest CUDA run (0.7310 s), so the two
-distributions overlap. This is not a power ceiling: the smallest p attainable
-from a 5-vs-5 median statistic is 6/252 = 0.0238, so the design had room and five
-repeats simply were not enough to separate a noisy shared Colab CPU from the GPU.
+The earlier CUDA headline was an artifact of warm-up contamination. In the
+corrected run, the discarded CPU warm-up took 1.3072 s against a steady-state
+median of 0.2742 s. The original five-repeat protocol did not separate warm-up
+from timed fits and reported a CPU median of 0.8554 s. Once warm-up was measured
+and excluded, the effect disappeared and reversed direction.
 
-CPU fit times varied **4.29x** across repeats against CUDA's **1.77x**, so the
-more robust finding is consistency rather than raw speed — and that one does not
-depend on a median holding up.
+On 6,000 rows and 500 trees there is not enough work per boosting round to
+amortise host-to-device transfer and kernel-launch overhead. This is a result for
+this small tabular workload, not a universal CPU-versus-GPU conclusion.
 
-The maximum absolute difference between CPU and CUDA validation probabilities was
-0.2762. Read against the frozen 0.66 threshold, a row at 0.55 on CPU can be 0.83
-on CUDA: opposite sides of the decision boundary. **These are two different
-models, not one model on two devices** — XGBoost's CPU and CUDA `hist`
-implementations sketch quantiles differently. The count of validation rows where
-the two disagree at 0.66 is the number that matters, and this run did not record
-the probabilities needed to compute it retrospectively; the new protocol emits it
-as `disagreement_at_threshold`.
+**What survived the reversal:** CUDA remained the more consistent device—standard
+deviation 0.0340 against 0.0928 and spread 1.25x against 2.25x. A finding that
+holds through a reversal of the headline is the more trustworthy of the two.
 
-`sensorguard verify-evidence` now rejects this file:
+### CPU and CUDA are two different models
 
-```
-Evidence rejected: underpowered benchmark: 5 timed runs per device, minimum is 10
-```
+XGBoost's `hist` implementations can sketch quantiles differently across device
+and build contexts. At the frozen 0.66 threshold, the two Colab models disagree
+on **8 of 2000 validation rows (0.4%)**, with a maximum absolute probability
+difference of 0.2762. Run independently, the same validation F1 sweep selects
+0.84 for the Colab CPU model and 0.76 for the CUDA model; a tuned threshold does
+not transfer between fitted artifacts.
 
-### Pending: the n=15 rerun
+The validation agreement metrics are byte-identical to the August 4 Colab run:
+CPU AP 0.7769458889549244 and ROC-AUC 0.9660211910851297; CUDA AP
+0.7612584673736296 and ROC-AUC 0.9670411642918036. Reproducing those values with
+`random_state=42` is a reproducibility signal, not a copy-paste error.
 
-The benchmark now takes 15 timed repeats per device after one discarded warm-up
-fit, and computes the permutation p-value, standard deviations, spread ratios and
-threshold disagreement inside the run. **That run has not been performed** — it
-needs a Colab T4, which is Mayank's to execute. Until it exists there is no
-n=15 claim to make, and the honest statement is the one above: not established at
-n=5.
+### Why 0.66, 0.84, and 0.76 are all recorded
 
-`TODO(phase-3)`: insert the n=15 measured claim here only after the downloaded
-report passes `sensorguard verify-evidence`. The claim must state whether the
-p-value was exact or a seeded Monte Carlo approximation; at 15-vs-15,
-`C(30, 15)` exceeds the protocol's 200,000-split exact-enumeration limit.
+The discrepancy is not caused by different objectives, splits, or sweep grids.
+All use the same validation-only rule: maximize F1 over thresholds 0.01 through
+0.99, then recall, then closeness to 0.5. The saved CPU model that produced the
+official held-out result has validation AP 0.7659315934980411 and selects 0.66.
+That frozen threshold governs its recorded test F1 of 0.7368.
 
-The submitted values are preserved as normalized JSON in
-`docs/evidence/cuda-colab-t4-report.json`. The original downloaded report's
-SHA-256 is
-`39916dd184af82243ba30528bc527fc229b2e59c3e7d61663dd98ece6fe69fc6`.
+The Colab benchmark trained separate Linux CPU and CUDA model instances rather
+than loading the saved model. Their validation AP values are 0.7769458889549244
+and 0.7612584673736296, proving that their fitted predictions differ from the
+saved artifact even under the same configuration and random state. They select
+0.84 and 0.76 respectively. The evidence supports platform/build-dependent
+histogram training as the explanation, but it does not isolate the lower-level
+cause further because model hashes and validation probabilities were not saved.
+No threshold was changed and the official test split was not evaluated again.
+
+### Superseded: the underpowered August 4 run
+
+The retained five-repeat report produced the historical **2.05x CUDA speedup**
+headline, but its timing sample included startup effects and its one-sided exact
+permutation result was p = 0.0595. It is preserved unchanged apart from a
+`superseded_by` pointer to the corrected n=15 evidence. The verifier returns
+`superseded` for this file; an underpowered report without a verified replacement
+remains a hard error.
+
+Evidence files and downloaded-source SHA-256 values:
+
+- current n=15 report: `docs/evidence/cuda-colab-t4-report-n15.json`,
+  `d40b9b0e1550f361f7026b82acc3539e94680420bf9b5c251fd9ef5742399dcc`;
+- superseded n=5 report: `docs/evidence/cuda-colab-t4-report.json`,
+  `39916dd184af82243ba30528bc527fc229b2e59c3e7d61663dd98ece6fe69fc6`.

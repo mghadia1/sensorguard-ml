@@ -64,32 +64,13 @@ hyperparameters except for `device`, records repeated fit times, and compares
 average precision, ROC-AUC, and probability outputs on validation data. It does
 **not** evaluate the official test split again.
 
-**The speed claim is not statistically established.** On the August 4, 2026
-Colab T4 run, CUDA's median fit time was 2.05x faster than CPU's over five timed
-repeats per device — but an exact permutation test on the median difference
-(all 252 splits) gives **p = 0.0595**. The fastest CPU run beat the slowest CUDA
-run, so the distributions overlap.
-
-CPU fit times varied **4.29x** across repeats against CUDA's **1.77x**, so the
-more robust finding is consistency, not raw speed.
-
-At the frozen 0.66 threshold the CPU and CUDA models can disagree: the maximum
-absolute probability difference was 0.2762, enough to put a row on the opposite
-side of the boundary. **These are two different models, not one model on two
-devices** — XGBoost's CPU and CUDA `hist` implementations sketch quantiles
-differently.
-
-The benchmark now runs 15 timed repeats per device after a discarded warm-up fit
-and computes the p-value, spread ratios, and threshold-disagreement count inside
-the run. That rerun is still pending a Colab T4. The five-repeat evidence is kept
-at [`docs/evidence/cuda-colab-t4-report.json`](docs/evidence/cuda-colab-t4-report.json)
-and **is now rejected by the verifier for being underpowered** — the two files
-side by side are the point.
-
-`TODO(phase-3)`: replace this marker only from the downloaded n=15 report with
-the measured median speedup, permutation p-value and test mode, both spread
-ratios, frozen-threshold disagreement count/denominator, maximum probability
-difference, and independently selected CPU/CUDA validation thresholds.
+With warm-up excluded over 15 timed repeats per device, CPU was **1.55x faster**
+than the Colab Tesla T4: median 0.2742 s against 0.4248 s. A seeded 100,000-draw
+permutation test gives **p = 0.0003** for CPU being faster. CUDA was more
+consistent, with 0.0340 s standard deviation and 1.25x spread against CPU's
+0.0928 s and 2.25x. This small synthetic-data benchmark does not establish a
+universal CPU-versus-GPU result. The corrected interpretation, model-agreement
+results, and preserved superseded run are in [docs/results.md](docs/results.md).
 
 Audit the published evidence without downloading data or retraining:
 
@@ -101,9 +82,11 @@ The command independently recomputes the medians, speedup, standard deviations,
 spread ratios, and the permutation p-value from the raw timing runs, and checks
 the frozen split policy, CUDA build flag, warm-up exclusion, minimum repeat
 count, threshold-disagreement arithmetic, validation-metric ranges, and the
-zero-test-access claim. Recomputing the p-value rather than reading it is what
-makes this evidence rather than a checksum. CI runs the same validator through the test suite so an
-edited or internally inconsistent benchmark fails visibly.
+zero-test-access claim. It also marks the retained five-repeat artifact as
+superseded by the verified n=15 report. Recomputing the p-value rather than
+reading it is what makes this evidence rather than a checksum. CI runs the same
+validator through the test suite so an edited or internally inconsistent
+benchmark fails visibly.
 
 ## Why some columns are excluded
 

@@ -34,6 +34,42 @@ def _unit_interval(value: Any, label: str) -> float:
     return number
 
 
+def _verify_superseding_report(
+    evidence_path: Path, superseded_by: Any
+) -> tuple[str, dict[str, Any]]:
+    """Resolve a retired artifact only to a verified peer evidence file."""
+
+    reference = str(superseded_by)
+    reference_path = Path(reference)
+    if (
+        not reference
+        or reference_path.is_absolute()
+        or reference_path.name != reference
+        or reference_path.suffix != ".json"
+    ):
+        raise ValueError("superseded_by must name a JSON file in the evidence directory")
+    replacement_path = evidence_path.parent / reference_path
+    if replacement_path.resolve() == evidence_path.resolve():
+        raise ValueError("evidence cannot supersede itself")
+    if not replacement_path.is_file():
+        raise ValueError(f"superseding evidence does not exist: {reference}")
+    replacement_payload = json.loads(replacement_path.read_text(encoding="utf-8"))
+    replacement_timing = replacement_payload.get("timing_seconds", {})
+    replacement_cpu_runs = replacement_timing.get("cpu_fit_runs", [])
+    replacement_cuda_runs = replacement_timing.get("cuda_fit_runs", [])
+    if (
+        len(replacement_cpu_runs) < MINIMUM_REPEATS_PER_DEVICE
+        or len(replacement_cuda_runs) < MINIMUM_REPEATS_PER_DEVICE
+    ):
+        raise ValueError(
+            f"superseding evidence is also underpowered: {reference}"
+        )
+    replacement = verify_cuda_evidence(replacement_path)
+    if replacement.get("status") != "verified":
+        raise ValueError(f"superseding evidence is not current and verified: {reference}")
+    return reference, replacement
+
+
 def verify_cuda_evidence(path: str | Path) -> dict[str, Any]:
     """Validate provenance, protocol guards, timing arithmetic, and metrics."""
 
@@ -69,20 +105,12 @@ def verify_cuda_evidence(path: str | Path) -> dict[str, Any]:
         raise ValueError(
             f"device run counts differ: {len(cpu_runs)} CPU vs {len(cuda_runs)} CUDA"
         )
-    if len(cpu_runs) < MINIMUM_REPEATS_PER_DEVICE:
-        raise ValueError(
-            f"underpowered benchmark: {len(cpu_runs)} timed runs per device, "
-            f"minimum is {MINIMUM_REPEATS_PER_DEVICE}"
-        )
     if repeats < 1 or len(cpu_runs) != repeats or len(cuda_runs) != repeats:
         raise ValueError(
             "timing-run counts differ from the declared repeat count: "
             f"declared {repeats}, found {len(cpu_runs)} CPU and "
             f"{len(cuda_runs)} CUDA"
         )
-    if int(protocol.get("warmup_fits_discarded_per_device", 0)) != 1:
-        raise ValueError("protocol must discard exactly one warm-up fit per device")
-
     cpu_median = float(statistics.median(cpu_runs))
     cuda_median = float(statistics.median(cuda_runs))
     if not math.isclose(cpu_median, float(timing["cpu_fit_median"]), rel_tol=1e-12):
@@ -92,6 +120,29 @@ def verify_cuda_evidence(path: str | Path) -> dict[str, Any]:
     speedup = cpu_median / cuda_median
     if not math.isclose(speedup, float(timing["cpu_over_cuda_speedup"]), rel_tol=1e-12):
         raise ValueError("published CUDA speedup does not match the raw timings")
+
+    if len(cpu_runs) < MINIMUM_REPEATS_PER_DEVICE:
+        superseded_by = payload.get("superseded_by")
+        if superseded_by is None:
+            raise ValueError(
+                f"underpowered benchmark: {len(cpu_runs)} timed runs per device, "
+                f"minimum is {MINIMUM_REPEATS_PER_DEVICE}"
+            )
+        reference, replacement = _verify_superseding_report(
+            evidence_path, superseded_by
+        )
+        return {
+            "status": "superseded",
+            "repeats": repeats,
+            "cpu_over_cuda_speedup": speedup,
+            "superseded_by": reference,
+            "replacement_source_file_sha256": replacement["source_file_sha256"],
+            "official_test_rows_evaluated": 0,
+            "source_file_sha256": source_hash,
+        }
+
+    if int(protocol.get("warmup_fits_discarded_per_device", 0)) != 1:
+        raise ValueError("protocol must discard exactly one warm-up fit per device")
 
     # Recomputed, not trusted. A verifier that only rechecks the numbers it was
     # handed is a checksum; recomputing the p-value is what makes it evidence.

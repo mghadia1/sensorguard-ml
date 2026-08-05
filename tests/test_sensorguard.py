@@ -119,14 +119,18 @@ class MetricTests(unittest.TestCase):
 
 
 class PipelineTests(unittest.TestCase):
-    def test_the_underpowered_august_evidence_is_now_rejected(self) -> None:
-        """The five-repeat run is kept as history but no longer verifies.
-
-        Its own numbers are unchanged and internally consistent; five repeats
-        per device simply cannot separate a noisy shared CPU from the GPU.
-        """
-        with self.assertRaisesRegex(ValueError, "5 timed runs per device"):
-            verify_cuda_evidence("docs/evidence/cuda-colab-t4-report.json")
+    def test_published_cuda_evidence_tracks_current_and_superseded_runs(self) -> None:
+        current = verify_cuda_evidence(
+            "docs/evidence/cuda-colab-t4-report-n15.json"
+        )
+        retired = verify_cuda_evidence("docs/evidence/cuda-colab-t4-report.json")
+        self.assertEqual(current["status"], "verified")
+        self.assertEqual(current["repeats"], 15)
+        self.assertAlmostEqual(current["cpu_over_cuda_speedup"], 0.6455948061389983)
+        self.assertEqual(current["disagreeing_rows_at_frozen_threshold"], 8)
+        self.assertEqual(current["official_test_rows_evaluated"], 0)
+        self.assertEqual(retired["status"], "superseded")
+        self.assertEqual(retired["superseded_by"], "cuda-colab-t4-report-n15.json")
 
     def test_cuda_evidence_rejects_tampered_speedup(self) -> None:
         payload = make_cuda_evidence()
@@ -410,9 +414,9 @@ class CudaEvidenceVerifierTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "spread ratio"):
             verify_written_evidence(payload)
 
-    def test_fewer_than_ten_runs_per_device_is_rejected_by_count(self):
-        payload = make_cuda_evidence(repeats=9)
-        with self.assertRaisesRegex(ValueError, "9 timed runs per device"):
+    def test_five_run_report_without_superseded_by_is_rejected(self):
+        payload = make_cuda_evidence(repeats=5)
+        with self.assertRaisesRegex(ValueError, "5 timed runs per device"):
             verify_written_evidence(payload)
         self.assertEqual(MINIMUM_REPEATS_PER_DEVICE, 10)
 

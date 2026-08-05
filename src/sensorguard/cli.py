@@ -63,7 +63,7 @@ def main() -> int:
     evidence_parser.add_argument(
         "--report",
         type=Path,
-        default=Path("docs/evidence/cuda-colab-t4-report.json"),
+        default=Path("docs/evidence/cuda-colab-t4-report-n15.json"),
     )
 
     args = parser.parse_args()

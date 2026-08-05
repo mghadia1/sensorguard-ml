@@ -18,6 +18,7 @@ from sensorguard.data import (
     validate_dataset,
 )
 from sensorguard.download import file_sha256
+from sensorguard.evidence import verify_cuda_evidence
 from sensorguard.gpu_benchmark import _nvidia_smi
 from sensorguard.learning import QUESTIONS, save_answers
 from sensorguard.modeling import (
@@ -118,6 +119,25 @@ class MetricTests(unittest.TestCase):
 
 
 class PipelineTests(unittest.TestCase):
+    def test_published_cuda_evidence_tracks_current_and_superseded_runs(self) -> None:
+        current = verify_cuda_evidence(
+            "docs/evidence/cuda-colab-t4-report-n15.json"
+        )
+        retired = verify_cuda_evidence("docs/evidence/cuda-colab-t4-report.json")
+        self.assertEqual(current["status"], "verified")
+        self.assertEqual(current["repeats"], 15)
+        self.assertAlmostEqual(current["cpu_over_cuda_speedup"], 0.6455948061389983)
+        self.assertEqual(current["disagreeing_rows_at_frozen_threshold"], 8)
+        self.assertEqual(current["official_test_rows_evaluated"], 0)
+        self.assertEqual(retired["status"], "superseded")
+        self.assertEqual(retired["superseded_by"], "cuda-colab-t4-report-n15.json")
+
+    def test_cuda_evidence_rejects_tampered_speedup(self) -> None:
+        payload = make_cuda_evidence()
+        payload["timing_seconds"]["cpu_over_cuda_speedup"] = 99.0
+        with self.assertRaisesRegex(ValueError, "speedup"):
+            verify_written_evidence(payload)
+
     def test_cuda_benchmark_rejects_a_runtime_without_nvidia(self) -> None:
         with patch("sensorguard.gpu_benchmark.subprocess.run", side_effect=FileNotFoundError):
             with self.assertRaisesRegex(RuntimeError, "Colab"):
@@ -194,3 +214,226 @@ class LearningCheckTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# --------------------------------------------------------------------------
+# CUDA benchmark statistics
+# --------------------------------------------------------------------------
+
+import statistics
+
+from sensorguard.gpu_benchmark import (
+    disagreement_at_threshold,
+    permutation_p_value,
+)
+import sensorguard.gpu_benchmark as _gb
+from sensorguard.evidence import MINIMUM_REPEATS_PER_DEVICE, verify_cuda_evidence
+
+
+# The August 4, 2026 Colab T4 run. Pins the implementation to a published number.
+AUGUST_CPU_RUNS = [0.368, 0.806, 0.855, 1.105, 1.580]
+AUGUST_CUDA_RUNS = [0.413, 0.416, 0.418, 0.419, 0.731]
+
+
+class PermutationTestTests(unittest.TestCase):
+    def test_reproduces_the_published_august_p_value(self):
+        """Known answer: the underpowered 5v5 run gives exactly 15/252."""
+        p_value, exact, permutations = permutation_p_value(
+            AUGUST_CPU_RUNS, AUGUST_CUDA_RUNS
+        )
+        self.assertTrue(exact)
+        self.assertEqual(permutations, 252)
+        self.assertAlmostEqual(p_value, 0.0595, places=4)
+        self.assertEqual(round(p_value * 252), 15)
+
+    def test_identical_inputs_give_no_evidence(self):
+        """Identical samples cannot support 'CUDA is faster'."""
+        p_value, _, _ = permutation_p_value([1.0, 2, 3, 4, 5], [1.0, 2, 3, 4, 5])
+        self.assertEqual(p_value, 1.0)
+
+    def test_perfectly_separated_inputs_hit_the_attainable_floor(self):
+        """6/252, not 1/252 — the median statistic ties at the extreme."""
+        p_value, _, permutations = permutation_p_value(
+            [10.0, 11, 12, 13, 14], [1.0, 2, 3, 4, 5]
+        )
+        self.assertEqual(permutations, 252)
+        self.assertAlmostEqual(p_value, 6 / 252, places=6)
+
+    def test_exact_and_monte_carlo_paths_agree(self):
+        cpu = [0.9, 1.0, 1.1, 1.2, 1.3]
+        cuda = [0.4, 0.5, 0.6, 0.7, 0.8]
+        exact_p, is_exact, _ = permutation_p_value(cpu, cuda)
+        self.assertTrue(is_exact)
+
+        original = _gb.EXACT_PERMUTATION_LIMIT
+        _gb.EXACT_PERMUTATION_LIMIT = 1
+        try:
+            sampled_p, is_sampled_exact, permutations = permutation_p_value(cpu, cuda)
+        finally:
+            _gb.EXACT_PERMUTATION_LIMIT = original
+        self.assertFalse(is_sampled_exact)
+        self.assertEqual(permutations, _gb.MONTE_CARLO_PERMUTATIONS)
+        self.assertLess(abs(exact_p - sampled_p), 0.01)
+
+    def test_monte_carlo_is_reproducible_from_the_seed(self):
+        original = _gb.EXACT_PERMUTATION_LIMIT
+        _gb.EXACT_PERMUTATION_LIMIT = 1
+        try:
+            first, _, _ = permutation_p_value([3.0, 4, 5], [1.0, 2, 3], random_state=7)
+            second, _, _ = permutation_p_value([3.0, 4, 5], [1.0, 2, 3], random_state=7)
+        finally:
+            _gb.EXACT_PERMUTATION_LIMIT = original
+        self.assertEqual(first, second)
+
+    def test_unknown_alternative_is_rejected(self):
+        with self.assertRaises(ValueError):
+            permutation_p_value([1.0], [1.0], alternative="two_sided")
+
+
+class ThresholdDisagreementTests(unittest.TestCase):
+    def test_identical_probabilities_never_disagree(self):
+        probabilities = [0.1, 0.5, 0.66, 0.9]
+        result = disagreement_at_threshold(probabilities, probabilities, 0.66)
+        self.assertEqual(result["disagreeing_rows"], 0)
+        self.assertEqual(result["disagreeing_fraction"], 0.0)
+
+    def test_counts_rows_that_straddle_the_boundary(self):
+        """A 0.28 gap matters only relative to the decision threshold."""
+        cpu = [0.55, 0.10, 0.80]
+        cuda = [0.83, 0.38, 0.90]  # only the first crosses 0.66
+        result = disagreement_at_threshold(cpu, cuda, 0.66)
+        self.assertEqual(result["disagreeing_rows"], 1)
+        self.assertEqual(result["rows"], 3)
+        self.assertAlmostEqual(result["disagreeing_fraction"], 1 / 3)
+
+
+def make_cuda_evidence(
+    *, repeats: int = 15, random_state: int = 42, include_source_hash: bool = True
+) -> dict:
+    """An internally consistent CUDA evidence payload with enough repeats to verify.
+
+    Built from the raw runs so that every published statistic is derived, never
+    typed — which is the property the verifier exists to check.
+    """
+    cpu_runs = [0.80 + 0.01 * index for index in range(repeats)]
+    cuda_runs = [0.41 + 0.001 * index for index in range(repeats)]
+    p_value, exact, permutations = permutation_p_value(
+        cpu_runs, cuda_runs, random_state=random_state
+    )
+    cpu_median = float(statistics.median(cpu_runs))
+    cuda_median = float(statistics.median(cuda_runs))
+    agreement = {
+        "cpu_average_precision": 0.7769,
+        "cuda_average_precision": 0.7613,
+        "cpu_roc_auc": 0.9772,
+        "cuda_roc_auc": 0.9670,
+        "maximum_absolute_probability_difference": 0.2762,
+        "disagreement_at_threshold": {
+            "threshold": 0.66,
+            "rows": 2000,
+            "disagreeing_rows": 11,
+            "disagreeing_fraction": 11 / 2000,
+        },
+        "cpu_selected_threshold": 0.66,
+        "cuda_selected_threshold": 0.66,
+    }
+    payload = {
+        "status": "verified_cuda_run",
+        "protocol": {
+            "official_test_evaluated": False,
+            "random_state": random_state,
+            "repeats": repeats,
+            "warmup_fits_discarded_per_device": 1,
+            "frozen_decision_threshold": 0.66,
+            "xgboost": {"device": "cuda"},
+        },
+        "environment": {
+            "gpu": "Tesla T4",
+            "xgboost": "3.3.0",
+            "xgboost_build_info": {"USE_CUDA": True},
+        },
+        "rows": {"train": 6000, "validation": 2000, "test_evaluated": 0},
+        "timing_seconds": {
+            "cpu_fit_runs": cpu_runs,
+            "cuda_fit_runs": cuda_runs,
+            "cpu_fit_median": cpu_median,
+            "cuda_fit_median": cuda_median,
+            "cpu_over_cuda_speedup": cpu_median / cuda_median,
+            "cpu_fit_stdev": statistics.stdev(cpu_runs),
+            "cuda_fit_stdev": statistics.stdev(cuda_runs),
+            "cpu_fit_spread_ratio": max(cpu_runs) / min(cpu_runs),
+            "cuda_fit_spread_ratio": max(cuda_runs) / min(cuda_runs),
+            "speedup_p_value": p_value,
+            "speedup_test_exact": exact,
+            "speedup_test_permutations": permutations,
+            "warmup_seconds": {"cpu": 1.9, "cuda": 0.73},
+        },
+        "validation_agreement": agreement,
+    }
+    if include_source_hash:
+        payload["source_file_sha256"] = "0" * 64
+    return payload
+
+
+def verify_written_evidence(payload: dict):
+    with tempfile.TemporaryDirectory() as directory:
+        report = Path(directory) / "report.json"
+        report.write_text(json.dumps(payload), encoding="utf-8")
+        return verify_cuda_evidence(report)
+
+
+class CudaEvidenceVerifierTests(unittest.TestCase):
+    def test_a_well_formed_fifteen_repeat_report_verifies(self):
+        report = verify_written_evidence(make_cuda_evidence())
+        self.assertEqual(report["status"], "verified")
+        self.assertEqual(report["official_test_rows_evaluated"], 0)
+        self.assertEqual(report["repeats"], 15)
+        self.assertIn("speedup_p_value", report)
+
+    def test_a_fresh_benchmark_report_without_archival_hash_verifies(self):
+        report = verify_written_evidence(make_cuda_evidence(include_source_hash=False))
+        self.assertEqual(report["status"], "verified")
+        self.assertIsNone(report["source_file_sha256"])
+
+    def test_a_hand_edited_p_value_is_rejected(self):
+        """The p-value is recomputed from the raw runs, not trusted."""
+        payload = make_cuda_evidence()
+        payload["timing_seconds"]["speedup_p_value"] = 0.001
+        with self.assertRaisesRegex(ValueError, "p-value"):
+            verify_written_evidence(payload)
+
+    def test_a_hand_edited_stdev_is_rejected(self):
+        payload = make_cuda_evidence()
+        payload["timing_seconds"]["cpu_fit_stdev"] = 0.0001
+        with self.assertRaisesRegex(ValueError, "stdev"):
+            verify_written_evidence(payload)
+
+    def test_a_hand_edited_spread_ratio_is_rejected(self):
+        payload = make_cuda_evidence()
+        payload["timing_seconds"]["cuda_fit_spread_ratio"] = 1.0
+        with self.assertRaisesRegex(ValueError, "spread ratio"):
+            verify_written_evidence(payload)
+
+    def test_five_run_report_without_superseded_by_is_rejected(self):
+        payload = make_cuda_evidence(repeats=5)
+        with self.assertRaisesRegex(ValueError, "5 timed runs per device"):
+            verify_written_evidence(payload)
+        self.assertEqual(MINIMUM_REPEATS_PER_DEVICE, 10)
+
+    def test_a_warmup_fit_left_in_the_timed_runs_is_rejected(self):
+        payload = make_cuda_evidence()
+        timing = payload["timing_seconds"]
+        timing["warmup_seconds"]["cuda"] = timing["cuda_fit_runs"][0]
+        with self.assertRaisesRegex(ValueError, "warm-up"):
+            verify_written_evidence(payload)
+
+    def test_a_missing_disagreement_block_is_rejected(self):
+        payload = make_cuda_evidence()
+        del payload["validation_agreement"]["disagreement_at_threshold"]
+        with self.assertRaisesRegex(ValueError, "disagreement_at_threshold"):
+            verify_written_evidence(payload)
+
+    def test_the_deprecated_parity_key_still_verifies(self):
+        payload = make_cuda_evidence()
+        payload["validation_parity"] = payload.pop("validation_agreement")
+        self.assertEqual(verify_written_evidence(payload)["status"], "verified")

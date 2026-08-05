@@ -78,7 +78,7 @@ Each batch follows five steps:
 ## 10. What this project does not prove
 
 The UCI data is synthetic. The split is random rather than chronological or site-based. The labels encode a simulated data-generating process. The result is evidence that the pipeline works on this dataset, not evidence that it predicts failures in a real factory.
-## 11. CUDA parity benchmark
+## 11. CUDA agreement benchmark
 
 The optional Colab benchmark isolates XGBoost compute from preprocessing. A
 single preprocessor is fitted on the training split and transforms training and

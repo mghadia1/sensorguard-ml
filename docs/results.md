@@ -96,27 +96,82 @@ For this fitted pipeline and validation split, torque caused the largest loss in
 
 These results apply to one deterministic random split of the synthetic UCI dataset. The random split may place nearby values from the generated sequence into different splits, and it does not test a future time period, new machine, or new factory. The scores must not be described as real-world predictive-maintenance performance.
 
-## Verified CUDA comparison — August 4, 2026
+## Corrected CUDA comparison — 15 repeats, warm-up excluded
 
 A Colab Tesla T4 run used XGBoost 3.3.0 built with CUDA 12.9. The workflow
 reused the frozen XGBoost configuration, fitted preprocessing on 6,000 training
 rows, and compared predictions on 2,000 validation rows. It evaluated zero
 official-test rows.
 
-| Device | Median fit time (5 runs) | Validation AP | Validation ROC-AUC |
-|---|---:|---:|---:|
-| CPU | 0.8554 s | 0.7769 | 0.9660 |
-| CUDA (Tesla T4) | **0.4180 s** | 0.7613 | 0.9670 |
+| Device | Discarded warm-up | Median fit time (15 runs) | Standard deviation | Spread |
+|---|---:|---:|---:|---:|
+| CPU | 1.3072 s | **0.2742 s** | 0.0928 s | 2.25x |
+| CUDA (Tesla T4) | 0.7949 s | 0.4248 s | **0.0340 s** | **1.25x** |
 
-The observed median CPU-over-CUDA speedup was **2.05x**. CPU fit times ranged
-from 0.3681 to 1.5797 seconds and CUDA times ranged from 0.4128 to 0.7310
-seconds, so this small benchmark is noisy. The maximum absolute difference
-between CPU and CUDA validation probabilities was 0.2762. The implementations
-therefore showed similar aggregate ranking metrics, not identical predictions.
-This result applies only to this Colab run and does not establish that CUDA is
-always faster for small tabular datasets.
+With a discarded warm-up fit and 15 timed repeats per device, CPU was faster
+than the Tesla T4: median 0.2742 s against 0.4248 s, a CPU-over-CUDA ratio of
+0.6456, or **1.55x faster on CPU**. A seeded permutation test over 100,000
+resamples gives **p = 0.0003 for CPU being faster**; the prespecified opposite
+alternative, CUDA being faster, gives p = 0.9999. Thirteen of 15 CPU runs were
+faster than every CUDA run.
 
-The submitted values are preserved as normalized JSON in
-`docs/evidence/cuda-colab-t4-report.json`. The original downloaded report's
-SHA-256 is
-`39916dd184af82243ba30528bc527fc229b2e59c3e7d61663dd98ece6fe69fc6`.
+The earlier CUDA headline was an artifact of warm-up contamination. In the
+corrected run, the discarded CPU warm-up took 1.3072 s against a steady-state
+median of 0.2742 s. The original five-repeat protocol did not separate warm-up
+from timed fits and reported a CPU median of 0.8554 s. Once warm-up was measured
+and excluded, the effect disappeared and reversed direction.
+
+On 6,000 rows and 500 trees there is not enough work per boosting round to
+amortise host-to-device transfer and kernel-launch overhead. This is a result for
+this small tabular workload, not a universal CPU-versus-GPU conclusion.
+
+**What survived the reversal:** CUDA remained the more consistent device—standard
+deviation 0.0340 against 0.0928 and spread 1.25x against 2.25x. A finding that
+holds through a reversal of the headline is the more trustworthy of the two.
+
+### CPU and CUDA are two different models
+
+XGBoost's `hist` implementations can sketch quantiles differently across device
+and build contexts. At the frozen 0.66 threshold, the two Colab models disagree
+on **8 of 2000 validation rows (0.4%)**, with a maximum absolute probability
+difference of 0.2762. Run independently, the same validation F1 sweep selects
+0.84 for the Colab CPU model and 0.76 for the CUDA model; a tuned threshold does
+not transfer between fitted artifacts.
+
+The validation agreement metrics are byte-identical to the August 4 Colab run:
+CPU AP 0.7769458889549244 and ROC-AUC 0.9660211910851297; CUDA AP
+0.7612584673736296 and ROC-AUC 0.9670411642918036. Reproducing those values with
+`random_state=42` is a reproducibility signal, not a copy-paste error.
+
+### Why 0.66, 0.84, and 0.76 are all recorded
+
+The discrepancy is not caused by different objectives, splits, or sweep grids.
+All use the same validation-only rule: maximize F1 over thresholds 0.01 through
+0.99, then recall, then closeness to 0.5. The saved CPU model that produced the
+official held-out result has validation AP 0.7659315934980411 and selects 0.66.
+That frozen threshold governs its recorded test F1 of 0.7368.
+
+The Colab benchmark trained separate Linux CPU and CUDA model instances rather
+than loading the saved model. Their validation AP values are 0.7769458889549244
+and 0.7612584673736296, proving that their fitted predictions differ from the
+saved artifact even under the same configuration and random state. They select
+0.84 and 0.76 respectively. The evidence supports platform/build-dependent
+histogram training as the explanation, but it does not isolate the lower-level
+cause further because model hashes and validation probabilities were not saved.
+No threshold was changed and the official test split was not evaluated again.
+
+### Superseded: the underpowered August 4 run
+
+The retained five-repeat report produced the historical **2.05x CUDA speedup**
+headline, but its timing sample included startup effects and its one-sided exact
+permutation result was p = 0.0595. It is preserved unchanged apart from a
+`superseded_by` pointer to the corrected n=15 evidence. The verifier returns
+`superseded` for this file; an underpowered report without a verified replacement
+remains a hard error.
+
+Evidence files and downloaded-source SHA-256 values:
+
+- current n=15 report: `docs/evidence/cuda-colab-t4-report-n15.json`,
+  `d40b9b0e1550f361f7026b82acc3539e94680420bf9b5c251fd9ef5742399dcc`;
+- superseded n=5 report: `docs/evidence/cuda-colab-t4-report.json`,
+  `39916dd184af82243ba30528bc527fc229b2e59c3e7d61663dd98ece6fe69fc6`.

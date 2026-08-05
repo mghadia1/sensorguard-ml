@@ -56,7 +56,7 @@ The verified baseline results are recorded in `docs/results.md`. Generated model
 
 ## CUDA benchmark in Google Colab
 
-[Open the CUDA benchmark in Colab](https://colab.research.google.com/github/mghadia1/sensorguard-ml/blob/agent/cuda-colab-benchmark/notebooks/sensorguard_cuda_colab.ipynb)
+[Open the CUDA benchmark in Colab](https://colab.research.google.com/github/mghadia1/sensorguard-ml/blob/agent/add-evidence-verifier/notebooks/sensorguard_cuda_colab.ipynb)
 
 The notebook implements a controlled CPU-versus-CUDA XGBoost comparison on a
 Colab T4. It shares one training-fitted preprocessor, uses identical frozen
@@ -64,13 +64,32 @@ hyperparameters except for `device`, records repeated fit times, and compares
 average precision, ROC-AUC, and probability outputs on validation data. It does
 **not** evaluate the official test split again.
 
-The workflow was verified on a Colab Tesla T4 on August 4, 2026. Across five
-fits, median XGBoost training time was 0.8554 seconds on CPU and 0.4180 seconds
-on CUDA, a 2.05x speedup for this run. Validation AP was 0.7769 on CPU and
-0.7613 on CUDA; the implementations were close but not numerically identical.
-The full machine-readable evidence is in
-[`docs/evidence/cuda-colab-t4-report.json`](docs/evidence/cuda-colab-t4-report.json).
-This small, noisy benchmark does not establish a universal GPU speedup.
+**The speed claim is not statistically established.** On the August 4, 2026
+Colab T4 run, CUDA's median fit time was 2.05x faster than CPU's over five timed
+repeats per device — but an exact permutation test on the median difference
+(all 252 splits) gives **p = 0.0595**. The fastest CPU run beat the slowest CUDA
+run, so the distributions overlap.
+
+CPU fit times varied **4.29x** across repeats against CUDA's **1.77x**, so the
+more robust finding is consistency, not raw speed.
+
+At the frozen 0.66 threshold the CPU and CUDA models can disagree: the maximum
+absolute probability difference was 0.2762, enough to put a row on the opposite
+side of the boundary. **These are two different models, not one model on two
+devices** — XGBoost's CPU and CUDA `hist` implementations sketch quantiles
+differently.
+
+The benchmark now runs 15 timed repeats per device after a discarded warm-up fit
+and computes the p-value, spread ratios, and threshold-disagreement count inside
+the run. That rerun is still pending a Colab T4. The five-repeat evidence is kept
+at [`docs/evidence/cuda-colab-t4-report.json`](docs/evidence/cuda-colab-t4-report.json)
+and **is now rejected by the verifier for being underpowered** — the two files
+side by side are the point.
+
+`TODO(phase-3)`: replace this marker only from the downloaded n=15 report with
+the measured median speedup, permutation p-value and test mode, both spread
+ratios, frozen-threshold disagreement count/denominator, maximum probability
+difference, and independently selected CPU/CUDA validation thresholds.
 
 Audit the published evidence without downloading data or retraining:
 
@@ -78,9 +97,12 @@ Audit the published evidence without downloading data or retraining:
 sensorguard verify-evidence
 ```
 
-The command independently checks the frozen split policy, CUDA build flag, raw
-timing runs, reported medians and speedup, validation-metric ranges, and the
-zero-test-access claim. CI runs the same validator through the test suite so an
+The command independently recomputes the medians, speedup, standard deviations,
+spread ratios, and the permutation p-value from the raw timing runs, and checks
+the frozen split policy, CUDA build flag, warm-up exclusion, minimum repeat
+count, threshold-disagreement arithmetic, validation-metric ranges, and the
+zero-test-access claim. Recomputing the p-value rather than reading it is what
+makes this evidence rather than a checksum. CI runs the same validator through the test suite so an
 edited or internally inconsistent benchmark fails visibly.
 
 ## Why some columns are excluded

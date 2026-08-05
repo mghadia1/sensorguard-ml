@@ -55,7 +55,7 @@ def main() -> int:
         "--out", type=Path, default=Path("outputs/cuda-benchmark/report.json")
     )
     gpu_parser.add_argument("--random-state", type=int, default=42)
-    gpu_parser.add_argument("--repeats", type=int, default=3)
+    gpu_parser.add_argument("--repeats", type=int, default=15)
 
     evidence_parser = subparsers.add_parser(
         "verify-evidence", help="audit the published CUDA benchmark evidence"
@@ -129,7 +129,13 @@ def main() -> int:
         )
         return 0
     if args.command == "verify-evidence":
-        result = verify_cuda_evidence(args.report)
+        # A failed audit is a result, not a crash: report it plainly and exit
+        # non-zero so CI and a human read the same sentence.
+        try:
+            result = verify_cuda_evidence(args.report)
+        except (ValueError, KeyError) as error:
+            print(f"Evidence rejected: {error}")
+            return 1
         print(json.dumps(result, indent=2))
         return 0
     raise AssertionError(f"unsupported command: {args.command}")

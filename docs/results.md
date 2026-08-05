@@ -108,13 +108,49 @@ official-test rows.
 | CPU | 0.8554 s | 0.7769 | 0.9660 |
 | CUDA (Tesla T4) | **0.4180 s** | 0.7613 | 0.9670 |
 
-The observed median CPU-over-CUDA speedup was **2.05x**. CPU fit times ranged
-from 0.3681 to 1.5797 seconds and CUDA times ranged from 0.4128 to 0.7310
-seconds, so this small benchmark is noisy. The maximum absolute difference
-between CPU and CUDA validation probabilities was 0.2762. The implementations
-therefore showed similar aggregate ranking metrics, not identical predictions.
-This result applies only to this Colab run and does not establish that CUDA is
-always faster for small tabular datasets.
+**This run is underpowered and no longer verifies.** It is kept as history; the
+n=15 protocol below supersedes it.
+
+CUDA's median fit time was 2.05x faster than CPU's over five timed repeats per
+device. An exact permutation test on the median difference across all 252 splits
+gives **p = 0.0595**, so the difference is *not* established at this sample size.
+The fastest CPU run (0.3681 s) beat the slowest CUDA run (0.7310 s), so the two
+distributions overlap. This is not a power ceiling: the smallest p attainable
+from a 5-vs-5 median statistic is 6/252 = 0.0238, so the design had room and five
+repeats simply were not enough to separate a noisy shared Colab CPU from the GPU.
+
+CPU fit times varied **4.29x** across repeats against CUDA's **1.77x**, so the
+more robust finding is consistency rather than raw speed — and that one does not
+depend on a median holding up.
+
+The maximum absolute difference between CPU and CUDA validation probabilities was
+0.2762. Read against the frozen 0.66 threshold, a row at 0.55 on CPU can be 0.83
+on CUDA: opposite sides of the decision boundary. **These are two different
+models, not one model on two devices** — XGBoost's CPU and CUDA `hist`
+implementations sketch quantiles differently. The count of validation rows where
+the two disagree at 0.66 is the number that matters, and this run did not record
+the probabilities needed to compute it retrospectively; the new protocol emits it
+as `disagreement_at_threshold`.
+
+`sensorguard verify-evidence` now rejects this file:
+
+```
+Evidence rejected: underpowered benchmark: 5 timed runs per device, minimum is 10
+```
+
+### Pending: the n=15 rerun
+
+The benchmark now takes 15 timed repeats per device after one discarded warm-up
+fit, and computes the permutation p-value, standard deviations, spread ratios and
+threshold disagreement inside the run. **That run has not been performed** — it
+needs a Colab T4, which is Mayank's to execute. Until it exists there is no
+n=15 claim to make, and the honest statement is the one above: not established at
+n=5.
+
+`TODO(phase-3)`: insert the n=15 measured claim here only after the downloaded
+report passes `sensorguard verify-evidence`. The claim must state whether the
+p-value was exact or a seeded Monte Carlo approximation; at 15-vs-15,
+`C(30, 15)` exceeds the protocol's 200,000-split exact-enumeration limit.
 
 The submitted values are preserved as normalized JSON in
 `docs/evidence/cuda-colab-t4-report.json`. The original downloaded report's

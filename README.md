@@ -123,8 +123,48 @@ sensorguard predict \
   --out outputs/predictions.csv
 ```
 
+## Do these tests catch bugs?
+
+Forty-two passing tests is not evidence on its own; forty-two assertions that
+never fail also pass. `tools/mutation_check.py` injects fifteen deliberate
+faults into the arithmetic the claims above rest on — a failure-mode flag
+leaked into the features, a dropped `stratify=`, a ranking metric fed hard
+predictions instead of probabilities, inverted imbalance weighting — one at a
+time, and records whether the suite fails.
+
+**15/15 caught.** Two guards make that number mean something:
+
+- a control run with no mutation must pass first, otherwise a suite broken for
+  unrelated reasons would score a perfect 15/15 while testing nothing;
+- each fault's target text must appear exactly once in the source, so a
+  mutation that stops matching errors out instead of quietly shrinking the
+  denominator.
+
+The gate is verified non-vacuous: injecting a docstring edit that no assertion
+can observe is correctly reported `MISSED`, and the harness exits non-zero.
+
+The honest part is what the first run said. Before this pass the suite scored
+**4/15** — thirty-one tests that did not notice a leaked identifier column,
+either unstratified split, non-reproducible splits, precision and recall
+swapped, or a threshold sweep whose answer was discarded. `ClaimArithmeticTests`
+exists because those eleven faults went unnoticed. The same pass found a test
+reading committed evidence by a path relative to the caller's working
+directory, so it only passed when pytest was invoked from the project root.
+
+```bash
+python tools/mutation_check.py          # table
+python tools/mutation_check.py --json   # machine-readable
+```
+
+`tests/test_mutation_coverage.py` runs it in CI, so a future change that
+loosens the suite fails the build rather than going unnoticed.
+
 ## Honest limitations
 
+- The mutation harness covers `data.py` and `modeling.py` — the split protocol,
+  the leakage guard, and the reported metrics. Download, CLI, reporting, and the
+  GPU benchmark are tested but not fault-injected, so 15/15 is a claim about the
+  arithmetic, not about the whole package.
 - The source data is synthetic and has a low failure rate.
 - Random stratified splitting does not simulate future deployment or a different factory.
 - A good held-out score does not prove causal understanding or safe maintenance decisions.

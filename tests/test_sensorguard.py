@@ -6,12 +6,19 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+# Anchored to this file, not the caller's working directory: the committed
+# evidence below must resolve whether pytest is invoked from the project root,
+# from a parent directory, or from a copied tree.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
 import numpy as np
 import pandas as pd
 
 from sensorguard.data import (
+    EXPECTED_COLUMNS,
     FAILURE_MODE_COLUMNS,
     FEATURE_COLUMNS,
+    ID_COLUMNS,
     TARGET_COLUMN,
     feature_target,
     split_dataset,
@@ -24,6 +31,7 @@ from sensorguard.learning import QUESTIONS, save_answers
 from sensorguard.modeling import (
     binary_metrics,
     candidate_pipelines,
+    train_candidates,
     load_bundle,
     predict_rows,
     select_threshold,
@@ -121,9 +129,9 @@ class MetricTests(unittest.TestCase):
 class PipelineTests(unittest.TestCase):
     def test_published_cuda_evidence_tracks_current_and_superseded_runs(self) -> None:
         current = verify_cuda_evidence(
-            "docs/evidence/cuda-colab-t4-report-n15.json"
+            PROJECT_ROOT / "docs/evidence/cuda-colab-t4-report-n15.json"
         )
-        retired = verify_cuda_evidence("docs/evidence/cuda-colab-t4-report.json")
+        retired = verify_cuda_evidence(PROJECT_ROOT / "docs/evidence/cuda-colab-t4-report.json")
         self.assertEqual(current["status"], "verified")
         self.assertEqual(current["repeats"], 15)
         self.assertAlmostEqual(current["cpu_over_cuda_speedup"], 0.6455948061389983)
@@ -437,3 +445,109 @@ class CudaEvidenceVerifierTests(unittest.TestCase):
         payload = make_cuda_evidence()
         payload["validation_parity"] = payload.pop("validation_agreement")
         self.assertEqual(verify_written_evidence(payload)["status"], "verified")
+
+
+class ClaimArithmeticTests(unittest.TestCase):
+    """Tests for the arithmetic the README's claims actually rest on.
+
+    Every case here was written because `tools/mutation_check.py` injected a
+    plausible fault and the suite did not notice. They are not redundant with
+    the tests above: each one failed to fail.
+    """
+
+    # --- leakage guard ----------------------------------------------------
+    def test_features_exclude_identifiers_and_failure_modes(self) -> None:
+        features = set(FEATURE_COLUMNS)
+        self.assertEqual(features & set(ID_COLUMNS), set())
+        self.assertEqual(features & set(FAILURE_MODE_COLUMNS), set())
+        self.assertNotIn(TARGET_COLUMN, features)
+
+    def test_expected_schema_still_names_every_excluded_column(self) -> None:
+        # The audit can only exclude columns it requires the file to contain.
+        for column in ID_COLUMNS + FAILURE_MODE_COLUMNS + (TARGET_COLUMN,):
+            self.assertIn(column, EXPECTED_COLUMNS)
+
+    # --- split protocol ---------------------------------------------------
+    def test_all_three_splits_preserve_the_failure_rate(self) -> None:
+        frame = make_fixture(row_count=1200)
+        splits = split_dataset(frame)
+        overall = float(frame[TARGET_COLUMN].mean())
+        for name, part in (
+            ("train", splits.train),
+            ("validation", splits.validation),
+            ("test", splits.test),
+        ):
+            expected = round(overall * len(part))
+            actual = int(part[TARGET_COLUMN].sum())
+            self.assertLessEqual(
+                abs(actual - expected),
+                1,
+                f"{name} split holds {actual} positives, stratification implies {expected}",
+            )
+
+    def test_splitting_twice_gives_the_same_rows(self) -> None:
+        frame = make_fixture(row_count=1200)
+        first, second = split_dataset(frame), split_dataset(frame)
+        for a, b in ((first.train, second.train), (first.validation, second.validation), (first.test, second.test)):
+            self.assertEqual(a["UDI"].tolist(), b["UDI"].tolist())
+
+    # --- metric arithmetic ------------------------------------------------
+    def test_precision_and_recall_are_not_interchanged(self) -> None:
+        labels = np.asarray([0, 1, 1, 1])
+        probabilities = np.asarray([0.9, 0.9, 0.2, 0.2])
+        metrics = binary_metrics(labels, probabilities, threshold=0.5)
+        self.assertAlmostEqual(metrics["precision"], 0.5)
+        self.assertAlmostEqual(metrics["recall"], 1.0 / 3.0)
+
+    def test_ranking_metrics_use_probabilities_not_hard_predictions(self) -> None:
+        from sklearn.metrics import average_precision_score, roc_auc_score
+
+        labels = np.asarray([0, 0, 1, 1])
+        probabilities = np.asarray([0.20, 0.90, 0.30, 0.95])
+        metrics = binary_metrics(labels, probabilities, threshold=0.5)
+        # Thresholding first would discard the ranking these metrics summarise.
+        self.assertAlmostEqual(metrics["roc_auc"], roc_auc_score(labels, probabilities))
+        self.assertAlmostEqual(
+            metrics["average_precision"], average_precision_score(labels, probabilities)
+        )
+        self.assertNotAlmostEqual(
+            metrics["roc_auc"], roc_auc_score(labels, (probabilities >= 0.5).astype(int))
+        )
+
+    def test_a_probability_equal_to_the_threshold_counts_as_positive(self) -> None:
+        metrics = binary_metrics(
+            np.asarray([1, 0]), np.asarray([0.5, 0.49]), threshold=0.5
+        )
+        self.assertEqual(metrics["confusion_matrix"], [[1, 0], [0, 1]])
+
+    def test_a_threshold_outside_the_unit_interval_is_rejected(self) -> None:
+        labels, probabilities = np.asarray([0, 1]), np.asarray([0.2, 0.8])
+        for bad in (1.5, -0.5):
+            with self.assertRaises(ValueError):
+                binary_metrics(labels, probabilities, threshold=bad)
+
+    def test_selected_threshold_is_the_one_the_sweep_found(self) -> None:
+        # Perfectly separable at 0.30, which the F1 sweep should locate instead
+        # of falling back to the 0.5 default.
+        labels = np.asarray([0, 0, 1, 1, 1])
+        probabilities = np.asarray([0.05, 0.10, 0.31, 0.35, 0.40])
+        chosen = select_threshold(labels, probabilities)
+        self.assertLessEqual(chosen, 0.31)
+        self.assertAlmostEqual(binary_metrics(labels, probabilities, threshold=chosen)["f1"], 1.0)
+
+    def test_imbalance_weighting_lifts_the_rare_class(self) -> None:
+        captured: dict[str, float] = {}
+
+        def spy(*, random_state: int, scale_pos_weight: float) -> dict[str, object]:
+            captured["scale_pos_weight"] = scale_pos_weight
+            return {}
+
+        frame = make_fixture(row_count=600)
+        splits = split_dataset(frame)
+        with patch("sensorguard.modeling.candidate_pipelines", spy):
+            train_candidates(splits)
+
+        positives = int(splits.train[TARGET_COLUMN].sum())
+        negatives = len(splits.train) - positives
+        self.assertGreater(captured["scale_pos_weight"], 1.0)
+        self.assertAlmostEqual(captured["scale_pos_weight"], negatives / positives)

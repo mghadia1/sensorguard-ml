@@ -1,5 +1,6 @@
 {
   "source_file_sha256": "39916dd184af82243ba30528bc527fc229b2e59c3e7d61663dd98ece6fe69fc6",
+  "superseded_by": "cuda-colab-t4-report-n15.json",
   "status": "verified_cuda_run",
   "protocol": {
     "purpose": "CPU versus CUDA implementation parity and timing",

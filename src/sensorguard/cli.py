@@ -10,6 +10,7 @@ import pandas as pd
 
 from .data import load_dataset, split_dataset, validate_dataset
 from .download import download_dataset
+from .evidence import verify_cuda_evidence
 from .gpu_benchmark import run_gpu_benchmark
 from .learning import run_interactive_check
 from .modeling import load_bundle, predict_rows, train_evaluate_save
@@ -54,7 +55,16 @@ def main() -> int:
         "--out", type=Path, default=Path("outputs/cuda-benchmark/report.json")
     )
     gpu_parser.add_argument("--random-state", type=int, default=42)
-    gpu_parser.add_argument("--repeats", type=int, default=3)
+    gpu_parser.add_argument("--repeats", type=int, default=15)
+
+    evidence_parser = subparsers.add_parser(
+        "verify-evidence", help="audit the published CUDA benchmark evidence"
+    )
+    evidence_parser.add_argument(
+        "--report",
+        type=Path,
+        default=Path("docs/evidence/cuda-colab-t4-report-n15.json"),
+    )
 
     args = parser.parse_args()
     if args.command == "download":
@@ -117,6 +127,16 @@ def main() -> int:
             f"speedup={timing['cpu_over_cuda_speedup']:.3f}x. "
             f"Wrote {args.out}"
         )
+        return 0
+    if args.command == "verify-evidence":
+        # A failed audit is a result, not a crash: report it plainly and exit
+        # non-zero so CI and a human read the same sentence.
+        try:
+            result = verify_cuda_evidence(args.report)
+        except (ValueError, KeyError) as error:
+            print(f"Evidence rejected: {error}")
+            return 1
+        print(json.dumps(result, indent=2))
         return 0
     raise AssertionError(f"unsupported command: {args.command}")
 

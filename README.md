@@ -56,7 +56,7 @@ The verified baseline results are recorded in `docs/results.md`. Generated model
 
 ## CUDA benchmark in Google Colab
 
-[Open the CUDA benchmark in Colab](https://colab.research.google.com/github/mghadia1/sensorguard-ml/blob/agent/cuda-colab-benchmark/notebooks/sensorguard_cuda_colab.ipynb)
+[Open the CUDA benchmark in Colab](https://colab.research.google.com/github/mghadia1/sensorguard-ml/blob/agent/add-evidence-verifier/notebooks/sensorguard_cuda_colab.ipynb)
 
 The notebook implements a controlled CPU-versus-CUDA XGBoost comparison on a
 Colab T4. It shares one training-fitted preprocessor, uses identical frozen
@@ -64,13 +64,29 @@ hyperparameters except for `device`, records repeated fit times, and compares
 average precision, ROC-AUC, and probability outputs on validation data. It does
 **not** evaluate the official test split again.
 
-The workflow was verified on a Colab Tesla T4 on August 4, 2026. Across five
-fits, median XGBoost training time was 0.8554 seconds on CPU and 0.4180 seconds
-on CUDA, a 2.05x speedup for this run. Validation AP was 0.7769 on CPU and
-0.7613 on CUDA; the implementations were close but not numerically identical.
-The full machine-readable evidence is in
-[`docs/evidence/cuda-colab-t4-report.json`](docs/evidence/cuda-colab-t4-report.json).
-This small, noisy benchmark does not establish a universal GPU speedup.
+With warm-up excluded over 15 timed repeats per device, CPU was **1.55x faster**
+than the Colab Tesla T4: median 0.2742 s against 0.4248 s. A seeded 100,000-draw
+permutation test gives **p = 0.0003** for CPU being faster. CUDA was more
+consistent, with 0.0340 s standard deviation and 1.25x spread against CPU's
+0.0928 s and 2.25x. This small synthetic-data benchmark does not establish a
+universal CPU-versus-GPU result. The corrected interpretation, model-agreement
+results, and preserved superseded run are in [docs/results.md](docs/results.md).
+
+Audit the published evidence without downloading data or retraining:
+
+```bash
+sensorguard verify-evidence
+```
+
+The command independently recomputes the medians, speedup, standard deviations,
+spread ratios, and the permutation p-value from the raw timing runs, and checks
+the frozen split policy, CUDA build flag, warm-up exclusion, minimum repeat
+count, threshold-disagreement arithmetic, validation-metric ranges, and the
+zero-test-access claim. It also marks the retained five-repeat artifact as
+superseded by the verified n=15 report. Recomputing the p-value rather than
+reading it is what makes this evidence rather than a checksum. CI runs the same
+validator through the test suite so an edited or internally inconsistent
+benchmark fails visibly.
 
 ## Why some columns are excluded
 
@@ -107,8 +123,48 @@ sensorguard predict \
   --out outputs/predictions.csv
 ```
 
+## Do these tests catch bugs?
+
+Forty-two passing tests is not evidence on its own; forty-two assertions that
+never fail also pass. `tools/mutation_check.py` injects fifteen deliberate
+faults into the arithmetic the claims above rest on — a failure-mode flag
+leaked into the features, a dropped `stratify=`, a ranking metric fed hard
+predictions instead of probabilities, inverted imbalance weighting — one at a
+time, and records whether the suite fails.
+
+**15/15 caught.** Two guards make that number mean something:
+
+- a control run with no mutation must pass first, otherwise a suite broken for
+  unrelated reasons would score a perfect 15/15 while testing nothing;
+- each fault's target text must appear exactly once in the source, so a
+  mutation that stops matching errors out instead of quietly shrinking the
+  denominator.
+
+The gate is verified non-vacuous: injecting a docstring edit that no assertion
+can observe is correctly reported `MISSED`, and the harness exits non-zero.
+
+The honest part is what the first run said. Before this pass the suite scored
+**4/15** — thirty-one tests that did not notice a leaked identifier column,
+either unstratified split, non-reproducible splits, precision and recall
+swapped, or a threshold sweep whose answer was discarded. `ClaimArithmeticTests`
+exists because those eleven faults went unnoticed. The same pass found a test
+reading committed evidence by a path relative to the caller's working
+directory, so it only passed when pytest was invoked from the project root.
+
+```bash
+python tools/mutation_check.py          # table
+python tools/mutation_check.py --json   # machine-readable
+```
+
+`tests/test_mutation_coverage.py` runs it in CI, so a future change that
+loosens the suite fails the build rather than going unnoticed.
+
 ## Honest limitations
 
+- The mutation harness covers `data.py` and `modeling.py` — the split protocol,
+  the leakage guard, and the reported metrics. Download, CLI, reporting, and the
+  GPU benchmark are tested but not fault-injected, so 15/15 is a claim about the
+  arithmetic, not about the whole package.
 - The source data is synthetic and has a low failure rate.
 - Random stratified splitting does not simulate future deployment or a different factory.
 - A good held-out score does not prove causal understanding or safe maintenance decisions.
